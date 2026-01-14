@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { Html5QrcodeScanner } from "html5-qrcode";
+import { Html5QrcodeScanner, Html5QrcodeSupportedFormats } from "html5-qrcode";
 import { collection, addDoc } from "firebase/firestore";
 import { db, auth } from "@/lib/firebase";
 import { LocusItem } from "@/types";
@@ -11,21 +11,15 @@ import { onAuthStateChanged, type User } from "firebase/auth";
 export default function NewItemPage() {
   const router = useRouter();
   const [user, setUser] = useState<User | null>(null);
-  
-  // Estados do Fluxo
   const [isScanning, setIsScanning] = useState(false);
   const [assetCode, setAssetCode] = useState<string | null>(null);
-  
-  // Estados do Formulário
   const [brand, setBrand] = useState("");
   const [description, setDescription] = useState("");
-  const [calibrationDate, setCalibrationDate] = useState(""); // YYYY-MM-DD
-  
-  // Estados de UI
+  const [calibrationDate, setCalibrationDate] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [scannerError, setScannerError] = useState<string | null>(null);
 
-  // Verificar autenticação
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
       if (!currentUser) {
@@ -37,36 +31,79 @@ export default function NewItemPage() {
     return () => unsubscribe();
   }, [router]);
 
-  // Inicializar Scanner
   useEffect(() => {
     if (isScanning) {
-      const scanner = new Html5QrcodeScanner(
-        "reader",
-        { 
-          fps: 10, 
-          qrbox: { width: 250, height: 250 },
+      let scanner: Html5QrcodeScanner | null = null;
+
+      const startScanner = (useExactFacingMode: boolean) => {
+        const config = {
+          fps: 10,
+          qrbox: { width: 300, height: 150 },
           aspectRatio: 1.0,
-          showTorchButtonIfSupported: true
-        },
-        /* verbose= */ false
-      );
+          showTorchButtonIfSupported: true,
+          videoConstraints: useExactFacingMode
+            ? { facingMode: { exact: "environment" } }
+            : { facingMode: "environment" },
+          formatsToSupport: [
+            Html5QrcodeSupportedFormats.CODE_128,
+            Html5QrcodeSupportedFormats.CODE_39,
+            Html5QrcodeSupportedFormats.EAN_13,
+            Html5QrcodeSupportedFormats.QR_CODE,
+          ],
+        };
 
-      scanner.render(
-        (decodedText) => {
-          // Sucesso
-          setAssetCode(decodedText);
-          setIsScanning(false);
-          scanner.clear().catch((err) => console.error("Erro ao limpar scanner", err));
-        },
-        () => {
-          // Erro de leitura contínuo (ignorar logs excessivos)
-          // console.log(errorMessage);
+        try {
+          scanner = new Html5QrcodeScanner("reader", config, false);
+          scanner.render(
+            (decodedText) => {
+              setAssetCode(decodedText);
+              setIsScanning(false);
+              setScannerError(null);
+
+              if (typeof window !== "undefined") {
+                const AudioContextRef =
+                  (window as typeof window & {
+                    webkitAudioContext?: typeof AudioContext;
+                  }).AudioContext ||
+                  (window as typeof window & {
+                    webkitAudioContext?: typeof AudioContext;
+                  }).webkitAudioContext;
+                if (AudioContextRef) {
+                  const audioCtx = new AudioContextRef();
+                  const oscillator = audioCtx.createOscillator();
+                  const gainNode = audioCtx.createGain();
+                  oscillator.connect(gainNode);
+                  gainNode.connect(audioCtx.destination);
+                  oscillator.frequency.value = 880;
+                  gainNode.gain.setValueAtTime(0.2, audioCtx.currentTime);
+                  oscillator.start();
+                  oscillator.stop(audioCtx.currentTime + 0.15);
+                }
+              }
+
+              if (scanner) {
+                scanner
+                  .clear()
+                  .catch(() => {});
+              }
+            },
+            () => {}
+          );
+        } catch {
+          if (useExactFacingMode) {
+            startScanner(false);
+          } else {
+            setScannerError("Não foi possível iniciar a câmera. Verifique as permissões.");
+          }
         }
-      );
+      };
 
-      // Cleanup se o usuário cancelar ou desmontar
+      startScanner(true);
+
       return () => {
-        scanner.clear().catch(() => {});
+        if (scanner) {
+          scanner.clear().catch(() => {});
+        }
       };
     }
   }, [isScanning]);
@@ -110,7 +147,7 @@ export default function NewItemPage() {
 
   const handleCancelScan = () => {
     setIsScanning(false);
-    // O useEffect cleanup cuidará de limpar o scanner
+    setScannerError(null);
   };
 
   if (!user) return null;
@@ -142,6 +179,32 @@ export default function NewItemPage() {
                 id="reader"
                 className="w-full max-w-full rounded-xl overflow-hidden border border-slate-200 min-h-[260px]"
               ></div>
+              {scannerError && (
+                <div className="mt-3 text-sm text-red-600">
+                  {scannerError}
+                </div>
+              )}
+              <div className="mt-4 flex flex-col sm:flex-row gap-3">
+                <button
+                  onClick={() => {
+                    setScannerError(null);
+                    setIsScanning(false);
+                    setTimeout(() => setIsScanning(true), 0);
+                  }}
+                  className="w-full sm:w-1/2 min-h-[48px] px-4 text-sm font-medium text-blue-600 border border-blue-200 rounded-lg hover:bg-blue-50 transition-colors"
+                >
+                  Tentar Novamente
+                </button>
+                <button
+                  onClick={() => {
+                    setIsScanning(false);
+                    setScannerError(null);
+                  }}
+                  className="w-full sm:w-1/2 min-h-[48px] px-4 text-sm font-medium text-slate-700 border border-slate-300 rounded-lg hover:bg-slate-50 transition-colors"
+                >
+                  Digitar Código Manualmente
+                </button>
+              </div>
               <button
                 onClick={handleCancelScan}
                 className="mt-4 w-full min-h-[48px] px-4 text-red-600 font-medium hover:bg-red-50 rounded-lg transition-colors"
