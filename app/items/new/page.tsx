@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { Html5QrcodeScanner, Html5QrcodeSupportedFormats } from "html5-qrcode";
+import { Html5Qrcode, Html5QrcodeSupportedFormats } from "html5-qrcode";
 import { collection, addDoc } from "firebase/firestore";
 import { db, auth } from "@/lib/firebase";
 import { LocusItem } from "@/types";
@@ -11,7 +11,7 @@ import { onAuthStateChanged, type User } from "firebase/auth";
 export default function NewItemPage() {
   const router = useRouter();
   const [user, setUser] = useState<User | null>(null);
-  const [isScanning, setIsScanning] = useState(false);
+  const [isScanning, setIsScanning] = useState(true); // Auto-start scanning by default
   const [assetCode, setAssetCode] = useState<string | null>(null);
   const [brand, setBrand] = useState("");
   const [description, setDescription] = useState("");
@@ -32,81 +32,93 @@ export default function NewItemPage() {
   }, [router]);
 
   useEffect(() => {
-    if (isScanning) {
-      let scanner: Html5QrcodeScanner | null = null;
+    // Only run if scanning is active, we don't have a code yet, and we are in the browser
+    if (isScanning && !assetCode && typeof window !== "undefined") {
+      const scannerId = "reader";
+      // Ensure element exists before starting (React renders first, so this should be fine)
+      if (!document.getElementById(scannerId)) return;
 
-      const startScanner = (useExactFacingMode: boolean) => {
-        const config = {
-          fps: 10,
-          qrbox: { width: 300, height: 150 },
-          aspectRatio: 1.0,
-          showTorchButtonIfSupported: true,
-          videoConstraints: useExactFacingMode
-            ? { facingMode: { exact: "environment" } }
-            : { facingMode: "environment" },
-          formatsToSupport: [
-            Html5QrcodeSupportedFormats.CODE_128,
-            Html5QrcodeSupportedFormats.CODE_39,
-            Html5QrcodeSupportedFormats.EAN_13,
-            Html5QrcodeSupportedFormats.QR_CODE,
-          ],
-        };
+      const scanner = new Html5Qrcode(scannerId, {
+        formatsToSupport: [
+          Html5QrcodeSupportedFormats.CODE_128,
+          Html5QrcodeSupportedFormats.CODE_39,
+          Html5QrcodeSupportedFormats.EAN_13,
+          Html5QrcodeSupportedFormats.QR_CODE,
+        ],
+        verbose: false
+      });
+      let isMounted = true;
 
+      const startScanner = async () => {
         try {
-          scanner = new Html5QrcodeScanner("reader", config, false);
-          scanner.render(
+          await scanner.start(
+            { facingMode: "environment" },
+            {
+              fps: 10,
+              qrbox: { width: 250, height: 150 },
+              aspectRatio: 1.0,
+            },
             (decodedText) => {
-              setAssetCode(decodedText);
-              setIsScanning(false);
-              setScannerError(null);
+              if (isMounted) {
+                // Success
+                scanner.stop().then(() => {
+                   // Clear scanner instance
+                   scanner.clear();
+                }).catch(err => console.warn("Failed to stop scanner", err));
 
-              if (typeof window !== "undefined") {
-                const AudioContextRef =
-                  (window as typeof window & {
-                    webkitAudioContext?: typeof AudioContext;
-                  }).AudioContext ||
-                  (window as typeof window & {
-                    webkitAudioContext?: typeof AudioContext;
-                  }).webkitAudioContext;
-                if (AudioContextRef) {
-                  const audioCtx = new AudioContextRef();
-                  const oscillator = audioCtx.createOscillator();
-                  const gainNode = audioCtx.createGain();
-                  oscillator.connect(gainNode);
-                  gainNode.connect(audioCtx.destination);
-                  oscillator.frequency.value = 880;
-                  gainNode.gain.setValueAtTime(0.2, audioCtx.currentTime);
-                  oscillator.start();
-                  oscillator.stop(audioCtx.currentTime + 0.15);
+                setAssetCode(decodedText);
+                setIsScanning(false);
+                setScannerError(null);
+
+                // Beep sound
+                if (typeof window !== "undefined") {
+                  const AudioContextRef =
+                    (window as typeof window & {
+                      webkitAudioContext?: typeof AudioContext;
+                    }).AudioContext ||
+                    (window as typeof window & {
+                      webkitAudioContext?: typeof AudioContext;
+                    }).webkitAudioContext;
+                  if (AudioContextRef) {
+                    const audioCtx = new AudioContextRef();
+                    const oscillator = audioCtx.createOscillator();
+                    const gainNode = audioCtx.createGain();
+                    oscillator.connect(gainNode);
+                    gainNode.connect(audioCtx.destination);
+                    oscillator.frequency.value = 880;
+                    gainNode.gain.setValueAtTime(0.2, audioCtx.currentTime);
+                    oscillator.start();
+                    oscillator.stop(audioCtx.currentTime + 0.15);
+                  }
                 }
               }
-
-              if (scanner) {
-                scanner
-                  .clear()
-                  .catch(() => {});
-              }
             },
-            () => {}
+            () => {
+              // Ignore frame parse errors (very frequent)
+            }
           );
-        } catch {
-          if (useExactFacingMode) {
-            startScanner(false);
-          } else {
+        } catch (err) {
+          console.error("Erro ao iniciar câmera", err);
+          if (isMounted) {
             setScannerError("Não foi possível iniciar a câmera. Verifique as permissões.");
           }
         }
       };
 
-      startScanner(true);
+      startScanner();
 
       return () => {
-        if (scanner) {
-          scanner.clear().catch(() => {});
+        isMounted = false;
+        // Cleanup: Stop if running. 
+        // Note: Html5Qrcode.stop() is async. We try to stop it if it's running.
+        if (scanner.isScanning) {
+            scanner.stop().then(() => scanner.clear()).catch(() => {});
+        } else {
+            scanner.clear();
         }
       };
     }
-  }, [isScanning]);
+  }, [isScanning, assetCode]);
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -145,11 +157,6 @@ export default function NewItemPage() {
     }
   };
 
-  const handleCancelScan = () => {
-    setIsScanning(false);
-    setScannerError(null);
-  };
-
   if (!user) return null;
 
   return (
@@ -158,59 +165,106 @@ export default function NewItemPage() {
 
       {!assetCode && (
         <div className="bg-white p-4 md:p-6 rounded-lg shadow-sm border border-slate-200 text-center">
-          {!isScanning ? (
-            <div className="py-6">
-              <div className="mb-4 text-slate-500">
-                Para começar, escaneie o código de barras ou QR Code do ativo.
-              </div>
-              <button
-                onClick={() => setIsScanning(true)}
-                className="inline-flex items-center justify-center px-6 bg-blue-600 text-white font-medium rounded-lg hover:bg-blue-700 transition-colors min-h-[48px] w-full max-w-xs"
-              >
-                <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v1m6 11h2m-6 0h-2v4m0-11v3m0 0h.01M12 12h4.01M16 20h4M4 12h4m12 0h.01M5 8h2a1 1 0 001-1V5a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1zm12 0h2a1 1 0 001-1V5a1 1 0 00-1-1h-2a1 1 0 00-1 1v2a1 1 0 001 1zM5 20h2a1 1 0 001-1v-2a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1z" />
-                </svg>
-                Escanear Código
-              </button>
-            </div>
-          ) : (
+          {isScanning ? (
             <div>
+               <div className="mb-4 text-slate-500 text-sm">
+                Aponte a câmera para o código de barras ou QR Code
+              </div>
               <div
                 id="reader"
-                className="w-full max-w-full rounded-xl overflow-hidden border border-slate-200 min-h-[260px]"
+                className="w-full max-w-full rounded-xl overflow-hidden border border-slate-200 min-h-[260px] bg-black"
               ></div>
               {scannerError && (
                 <div className="mt-3 text-sm text-red-600">
                   {scannerError}
                 </div>
               )}
-              <div className="mt-4 flex flex-col sm:flex-row gap-3">
-                <button
-                  onClick={() => {
-                    setScannerError(null);
-                    setIsScanning(false);
-                    setTimeout(() => setIsScanning(true), 0);
-                  }}
-                  className="w-full sm:w-1/2 min-h-[48px] px-4 text-sm font-medium text-blue-600 border border-blue-200 rounded-lg hover:bg-blue-50 transition-colors"
-                >
-                  Tentar Novamente
-                </button>
-                <button
-                  onClick={() => {
-                    setIsScanning(false);
-                    setScannerError(null);
-                  }}
-                  className="w-full sm:w-1/2 min-h-[48px] px-4 text-sm font-medium text-slate-700 border border-slate-300 rounded-lg hover:bg-slate-50 transition-colors"
-                >
-                  Digitar Código Manualmente
-                </button>
+              
+              <button
+                onClick={() => {
+                  setIsScanning(false);
+                  setScannerError(null);
+                }}
+                className="mt-4 w-full min-h-[48px] px-4 text-slate-700 font-medium border border-slate-300 rounded-lg hover:bg-slate-50 transition-colors"
+              >
+                Digitar Código Manualmente
+              </button>
+            </div>
+          ) : (
+            <div className="py-6">
+               <div className="mb-4 text-slate-500">
+                Digite o código manualmente ou use a câmera.
               </div>
               <button
-                onClick={handleCancelScan}
-                className="mt-4 w-full min-h-[48px] px-4 text-red-600 font-medium hover:bg-red-50 rounded-lg transition-colors"
+                onClick={() => {
+                    setIsScanning(true);
+                    setScannerError(null);
+                }}
+                className="inline-flex items-center justify-center px-6 bg-blue-600 text-white font-medium rounded-lg hover:bg-blue-700 transition-colors min-h-[48px] w-full max-w-xs mb-3"
               >
-                Cancelar Leitura
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v1m6 11h2m-6 0h-2v4m0-11v3m0 0h.01M12 12h4.01M16 20h4M4 12h4m12 0h.01M5 8h2a1 1 0 001-1V5a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1zm12 0h2a1 1 0 001-1V5a1 1 0 00-1-1h-2a1 1 0 00-1 1v2a1 1 0 001 1zM5 20h2a1 1 0 001-1v-2a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1z" />
+                </svg>
+                Ativar Câmera
               </button>
+              
+               {/* Opção de digitar manual já está implícita se isScanning é false, mas vamos mostrar o form de input manual se o usuário quiser? 
+                   Na verdade, a lógica anterior era: Se !isScanning, mostra botão de escanear. Se clicar, mostra scanner.
+                   Se o usuário quiser digitar manual, ele clica em "Digitar Manualmente" DENTRO do scanner, que seta isScanning(false).
+                   E agora? Se isScanning(false), o que mostramos?
+                   Se isScanning(false), deveríamos mostrar um input manual para o assetCode?
+                   
+                   A lógica original tinha um botão "Digitar Código Manualmente" que apenas parava o scanner. 
+                   Mas onde o usuário digitava?
+                   Ah, não havia input manual de assetCode no código original visível na leitura anterior! 
+                   O código original tinha `if (!assetCode)` -> scanner UI.
+                   Se `assetCode` existisse -> form.
+                   
+                   Espere, o botão "Digitar Código Manualmente" no código original fazia:
+                   onClick={() => { setIsScanning(false); setScannerError(null); }}
+                   
+                   E quando !isScanning, mostrava o botão "Escanear Código".
+                   Não havia campo de input manual para o assetCode no estado !assetCode!
+                   Isso significa que o usuário não conseguia digitar manualmente o código no fluxo anterior, a menos que eu tenha perdido algo.
+                   
+                   Vamos verificar o código anterior:
+                   Linhas 159-217: Renderiza se !assetCode.
+                   Linhas 161-175: Se !isScanning -> Botão "Escanear Código".
+                   Linhas 176-215: Se isScanning -> Scanner + Botão "Digitar Código Manualmente".
+                   
+                   Se o usuário clicasse em "Digitar Código Manualmente", voltava para a tela com o botão "Escanear Código". Loop infinito sem opção de input.
+                   O usuário provavelmente quer poder digitar o código.
+                   
+                   Vou adicionar um input manual quando !isScanning.
+               */}
+               
+               <div className="mt-4">
+                 <label className="block text-sm font-medium text-slate-700 mb-1 text-left">Código do Ativo (Manual)</label>
+                 <div className="flex gap-2">
+                    <input 
+                        type="text" 
+                        className="flex-1 bg-white border border-slate-300 text-slate-900 text-sm rounded-lg p-2.5 min-h-[48px]"
+                        placeholder="Digite o código..."
+                        onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                                setAssetCode((e.currentTarget as HTMLInputElement).value);
+                            }
+                        }}
+                        id="manual-asset-code"
+                    />
+                    <button
+                        onClick={() => {
+                            const input = document.getElementById('manual-asset-code') as HTMLInputElement;
+                            if (input && input.value) {
+                                setAssetCode(input.value);
+                            }
+                        }}
+                        className="px-4 py-2 bg-slate-800 text-white rounded-lg min-h-[48px]"
+                    >
+                        OK
+                    </button>
+                 </div>
+               </div>
             </div>
           )}
         </div>
@@ -240,6 +294,7 @@ export default function NewItemPage() {
                     setBrand("");
                     setDescription("");
                     setCalibrationDate("");
+                    setIsScanning(true); // Auto-start scanner again when clearing
                   }
                 }}
                 className="ml-2 text-sm text-blue-600 hover:text-blue-800"
