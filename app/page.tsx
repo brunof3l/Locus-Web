@@ -9,7 +9,7 @@ import {
   PieChart, Pie, Cell, Tooltip, ResponsiveContainer, Legend 
 } from "recharts";
 import * as XLSX from "xlsx";
-import { FileDown, PlusCircle, AlertTriangle, Box, Calendar } from "lucide-react";
+import { FileDown, PlusCircle, AlertTriangle, Box, Calendar, Eye, EyeOff } from "lucide-react";
 import Link from "next/link";
 
 const COLLECTION_NAME = "items";
@@ -24,6 +24,7 @@ export default function Dashboard() {
   // Login States
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState("");
 
   useEffect(() => {
@@ -172,20 +173,29 @@ export default function Dashboard() {
                   type="email"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
-                  className="w-full rounded-lg border border-gray-300 px-4 py-2 focus:border-blue-500 focus:outline-none"
+                  className="w-full rounded-lg border border-gray-300 px-4 py-2 text-gray-900 focus:border-blue-500 focus:outline-none"
                   placeholder="admin@locus.com"
                 />
               </div>
 
               <div className="mb-6">
                 <label className="mb-1 block text-sm font-semibold text-gray-700">Senha</label>
-                <input
-                  type="password"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  className="w-full rounded-lg border border-gray-300 px-4 py-2 focus:border-blue-500 focus:outline-none"
-                  placeholder="********"
-                />
+                <div className="relative">
+                  <input
+                    type={showPassword ? "text" : "password"}
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    className="w-full rounded-lg border border-gray-300 p-3 pr-10 text-gray-900 focus:border-blue-500 focus:outline-none"
+                    placeholder="********"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword(!showPassword)}
+                    className="absolute inset-y-0 right-0 flex items-center pr-3 text-gray-500 hover:text-gray-700"
+                  >
+                    {showPassword ? <EyeOff size={20} /> : <Eye size={20} />}
+                  </button>
+                </div>
               </div>
 
               <button
