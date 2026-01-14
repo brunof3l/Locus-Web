@@ -3,10 +3,17 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { onAuthStateChanged, type User } from "firebase/auth";
-import { collection, getDocs } from "firebase/firestore";
-import { auth, db } from "@/lib/firebase";
-import { Shield, User as UserIcon } from "lucide-react";
+import { initializeApp, getApps, deleteApp } from "firebase/app";
+import {
+  getAuth,
+  onAuthStateChanged,
+  type User,
+  createUserWithEmailAndPassword,
+  signOut,
+} from "firebase/auth";
+import { collection, getDocs, doc, setDoc } from "firebase/firestore";
+import { auth, db, firebaseConfig } from "@/lib/firebase";
+import { Shield, User as UserIcon, Eye, EyeOff } from "lucide-react";
 
 interface AppUser {
   id: string;
@@ -22,6 +29,14 @@ export default function AdminPage() {
   const [loadingUser, setLoadingUser] = useState(true);
   const [users, setUsers] = useState<AppUser[]>([]);
   const [loadingUsers, setLoadingUsers] = useState(false);
+  const [isCreating, setIsCreating] = useState(false);
+  const [newName, setNewName] = useState("");
+  const [newEmail, setNewEmail] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [newRole, setNewRole] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
+  const [creatingError, setCreatingError] = useState<string | null>(null);
+  const [creatingLoading, setCreatingLoading] = useState(false);
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
@@ -72,6 +87,75 @@ export default function AdminPage() {
 
   const totalUsers = users.length;
 
+  const handleCreateUser = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newName || !newEmail || !newPassword || !newRole) {
+      setCreatingError("Preencha todos os campos.");
+      return;
+    }
+
+    setCreatingLoading(true);
+    setCreatingError(null);
+
+    let secondaryApp;
+
+    try {
+      const existingSecondary = getApps().find(
+        (appInstance) => appInstance.name === "SecondaryApp"
+      );
+
+      secondaryApp =
+        existingSecondary || initializeApp(firebaseConfig, "SecondaryApp");
+
+      const secondaryAuth = getAuth(secondaryApp);
+
+      const userCredential = await createUserWithEmailAndPassword(
+        secondaryAuth,
+        newEmail,
+        newPassword
+      );
+
+      const newUser = userCredential.user;
+
+      await setDoc(doc(db, "users", newUser.uid), {
+        uid: newUser.uid,
+        displayName: newName,
+        name: newName,
+        email: newEmail,
+        role: newRole,
+        createdAt: Date.now(),
+        isAdmin: false,
+      });
+
+      setIsCreating(false);
+      setNewName("");
+      setNewEmail("");
+      setNewPassword("");
+      setNewRole("");
+      setShowPassword(false);
+    } catch (error: unknown) {
+      const message =
+        error && typeof error === "object" && "message" in error
+          ? String((error as { message: unknown }).message)
+          : null;
+      setCreatingError(
+        message || "Erro ao criar usuário. Tente novamente."
+      );
+    } finally {
+      try {
+        if (secondaryApp) {
+          const secondaryAuth = getAuth(secondaryApp);
+          await signOut(secondaryAuth);
+          if (secondaryApp.name === "SecondaryApp") {
+            await deleteApp(secondaryApp);
+          }
+        }
+      } catch {
+      }
+      setCreatingLoading(false);
+    }
+  };
+
   return (
     <div className="p-4 md:p-6 max-w-5xl mx-auto">
       <div className="flex items-center justify-between mb-6">
@@ -88,9 +172,21 @@ export default function AdminPage() {
             </p>
           </div>
         </div>
-        <div className="text-sm text-slate-600">
-          Total de usuários:{" "}
-          <span className="font-semibold text-slate-900">{totalUsers}</span>
+        <div className="flex items-center gap-3">
+          <div className="text-sm text-slate-600">
+            Total de usuários:{" "}
+            <span className="font-semibold text-slate-900">{totalUsers}</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              setIsCreating(true);
+              setCreatingError(null);
+            }}
+            className="inline-flex items-center rounded-lg bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-700 transition-colors"
+          >
+            + Novo Usuário
+          </button>
         </div>
       </div>
 
@@ -162,7 +258,131 @@ export default function AdminPage() {
           </table>
         )}
       </div>
+
+      {isCreating && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
+          <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-xl">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-lg font-semibold text-slate-900">
+                Novo Usuário
+              </h2>
+              <button
+                type="button"
+                onClick={() => {
+                  if (!creatingLoading) {
+                    setIsCreating(false);
+                    setCreatingError(null);
+                  }
+                }}
+                className="text-sm text-slate-500 hover:text-slate-700"
+              >
+                Fechar
+              </button>
+            </div>
+
+            {creatingError && (
+              <div className="mb-4 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">
+                {creatingError}
+              </div>
+            )}
+
+            <form onSubmit={handleCreateUser} className="space-y-4">
+              <div>
+                <label className="mb-1 block text-sm font-medium text-slate-700">
+                  Nome Completo
+                </label>
+                <input
+                  type="text"
+                  value={newName}
+                  onChange={(e) => setNewName(e.target.value)}
+                  className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 focus:border-blue-500 focus:outline-none"
+                  placeholder="Nome do funcionário"
+                  disabled={creatingLoading}
+                />
+              </div>
+
+              <div>
+                <label className="mb-1 block text-sm font-medium text-slate-700">
+                  Email
+                </label>
+                <input
+                  type="email"
+                  value={newEmail}
+                  onChange={(e) => setNewEmail(e.target.value)}
+                  className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 focus:border-blue-500 focus:outline-none"
+                  placeholder="email@empresa.com"
+                  disabled={creatingLoading}
+                />
+              </div>
+
+              <div>
+                <label className="mb-1 block text-sm font-medium text-slate-700">
+                  Senha
+                </label>
+                <div className="relative">
+                  <input
+                    type={showPassword ? "text" : "password"}
+                    value={newPassword}
+                    onChange={(e) => setNewPassword(e.target.value)}
+                    className="w-full rounded-lg border border-slate-300 px-3 py-2 pr-10 text-sm text-slate-900 focus:border-blue-500 focus:outline-none"
+                    placeholder="Senha temporária"
+                    disabled={creatingLoading}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword((prev) => !prev)}
+                    className="absolute inset-y-0 right-0 flex items-center pr-3 text-slate-500 hover:text-slate-700"
+                    tabIndex={-1}
+                  >
+                    {showPassword ? (
+                      <EyeOff className="h-4 w-4" />
+                    ) : (
+                      <Eye className="h-4 w-4" />
+                    )}
+                  </button>
+                </div>
+              </div>
+
+              <div>
+                <label className="mb-1 block text-sm font-medium text-slate-700">
+                  Cargo/Função
+                </label>
+                <input
+                  type="text"
+                  value={newRole}
+                  onChange={(e) => setNewRole(e.target.value)}
+                  className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 focus:border-blue-500 focus:outline-none"
+                  placeholder="Ex: Técnico, Enfermeiro, Gerente"
+                  disabled={creatingLoading}
+                />
+              </div>
+
+              <div className="mt-4 flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (!creatingLoading) {
+                      setIsCreating(false);
+                      setCreatingError(null);
+                    }
+                  }}
+                  className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+                  disabled={creatingLoading}
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-60"
+                  disabled={creatingLoading}
+                >
+                  {creatingLoading ? "Criando..." : "Criar Usuário"}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
-
