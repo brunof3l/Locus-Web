@@ -78,17 +78,23 @@ export default function Dashboard() {
   const exportToExcel = () => {
     if (items.length === 0) return;
 
-    const worksheet = XLSX.utils.json_to_sheet(
-      items.map(item => ({
-        ID: item.id,
-        Codigo: item.assetCode,
-        Marca: item.brand,
-        Descricao: item.description,
-        CriadoEm: item.createdAt ? new Date(item.createdAt).toLocaleDateString() : "",
-        VencimentoCalibracao: item.calibrationDueDate ? new Date(item.calibrationDueDate).toLocaleDateString() : "N/A"
-      }))
-    );
-    
+    const dataToExport = items.map((item) => ({
+      Patrimônio: item.assetCode,
+      Marca: item.brand,
+      Modelo: item.model || "",
+      Descrição: item.description,
+      "Nº Série": item.serialNumber || "",
+      Setor: item.responsibleSector || "",
+      Localização: item.location || "",
+      Estado: item.state || "",
+      Calibração: item.calibrationDueDate
+        ? new Date(item.calibrationDueDate).toLocaleDateString("pt-BR")
+        : "N/A",
+      Observações: item.notes || "",
+      "Data Cadastro": new Date(item.createdAt).toLocaleDateString("pt-BR"),
+    }));
+
+    const worksheet = XLSX.utils.json_to_sheet(dataToExport);
     const workbook = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(workbook, worksheet, "Patrimonio");
     XLSX.writeFile(workbook, "Locus_Exportacao.xlsx");

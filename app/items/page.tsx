@@ -112,7 +112,7 @@ export default function ItemsPage() {
               placeholder="Buscar por código, marca ou descrição..."
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
-              className="pl-10 block w-full rounded-md border-slate-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm bg-slate-50 border p-2.5"
+              className="pl-10 block w-full rounded-md border border-gray-300 bg-white px-4 py-2 text-gray-900 placeholder:text-gray-500 focus:border-blue-500 focus:outline-none sm:text-sm"
             />
           </div>
           
@@ -120,11 +120,11 @@ export default function ItemsPage() {
             <select
               value={statusFilter}
               onChange={(e) => setStatusFilter(e.target.value as "all" | "expired" | "valid")}
-              className="block w-full rounded-md border-slate-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm bg-slate-50 border p-2.5"
+              className="block w-full rounded-md border border-gray-300 bg-white px-4 py-2 text-gray-900 focus:border-blue-500 focus:outline-none sm:text-sm"
             >
-              <option value="all">Todos os Status</option>
-              <option value="valid">Em dia</option>
-              <option value="expired">Vencidos</option>
+              <option value="all" className="text-gray-900">Todos os Status</option>
+              <option value="valid" className="text-gray-900">Em dia</option>
+              <option value="expired" className="text-gray-900">Vencidos</option>
             </select>
           </div>
         </div>
