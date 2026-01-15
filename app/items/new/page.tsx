@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { Html5Qrcode, Html5QrcodeSupportedFormats } from "html5-qrcode";
 import { collection, addDoc } from "firebase/firestore";
@@ -11,7 +11,6 @@ import { onAuthStateChanged, type User } from "firebase/auth";
 export default function NewItemPage() {
   const router = useRouter();
   const [user, setUser] = useState<User | null>(null);
-  const [isScanning, setIsScanning] = useState(true); // Auto-start scanning by default
   const [assetCode, setAssetCode] = useState<string | null>(null);
   const [brand, setBrand] = useState("");
   const [description, setDescription] = useState("");
@@ -19,6 +18,16 @@ export default function NewItemPage() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [scannerError, setScannerError] = useState<string | null>(null);
+  const [isScanning, setIsScanning] = useState(false);
+  const [zoomCapabilities, setZoomCapabilities] = useState<{
+    min: number;
+    max: number;
+    step: number;
+  } | null>(null);
+  const [zoomValue, setZoomValue] = useState<number | null>(null);
+
+  const scannerRef = useRef<Html5Qrcode | null>(null);
+  const manualCodeRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
@@ -32,93 +41,179 @@ export default function NewItemPage() {
   }, [router]);
 
   useEffect(() => {
-    // Only run if scanning is active, we don't have a code yet, and we are in the browser
-    if (isScanning && !assetCode && typeof window !== "undefined") {
-      const scannerId = "reader";
-      // Ensure element exists before starting (React renders first, so this should be fine)
-      if (!document.getElementById(scannerId)) return;
+    return () => {
+      const scanner = scannerRef.current;
+      if (!scanner) return;
+      scanner
+        .stop()
+        .then(() => scanner.clear())
+        .catch(() => undefined);
+      scannerRef.current = null;
+    };
+  }, []);
 
-      const scanner = new Html5Qrcode(scannerId, {
+  const playBeep = () => {
+    if (typeof window === "undefined") return;
+    const w = window as typeof window & {
+      webkitAudioContext?: typeof AudioContext;
+    };
+    const AudioContextRef = w.AudioContext || w.webkitAudioContext;
+    if (!AudioContextRef) return;
+    const audioCtx = new AudioContextRef();
+    const oscillator = audioCtx.createOscillator();
+    const gainNode = audioCtx.createGain();
+    oscillator.connect(gainNode);
+    gainNode.connect(audioCtx.destination);
+    oscillator.frequency.value = 880;
+    gainNode.gain.setValueAtTime(0.2, audioCtx.currentTime);
+    oscillator.start();
+    oscillator.stop(audioCtx.currentTime + 0.15);
+  };
+
+  const stopScanner = async () => {
+    const scanner = scannerRef.current;
+    if (!scanner) {
+      setIsScanning(false);
+      setZoomCapabilities(null);
+      setZoomValue(null);
+      return;
+    }
+    try {
+      await scanner.stop();
+      await scanner.clear();
+    } catch {
+    } finally {
+      scannerRef.current = null;
+      setIsScanning(false);
+      setZoomCapabilities(null);
+      setZoomValue(null);
+    }
+  };
+
+  const applyInitialConstraints = async (scanner: Html5Qrcode) => {
+    const baseConstraints = {
+      facingMode: "environment",
+      width: { min: 1280, ideal: 1920, max: 2560 },
+      height: { min: 720, ideal: 1080 },
+      advanced: [{ focusMode: "continuous" }],
+    } as unknown as MediaTrackConstraints;
+
+    try {
+      await scanner.applyVideoConstraints(baseConstraints);
+    } catch {
+    }
+
+    try {
+      const capabilities = await (scanner as unknown as {
+        getRunningTrackCameraCapabilities: () => Promise<{
+          zoom?: {
+            min: number;
+            max: number;
+            step?: number;
+          };
+        }>;
+      }).getRunningTrackCameraCapabilities();
+      const zoom = capabilities.zoom;
+      if (zoom && typeof zoom.min === "number" && typeof zoom.max === "number") {
+        const step = typeof zoom.step === "number" && zoom.step > 0 ? zoom.step : 0.1;
+        setZoomCapabilities({
+          min: zoom.min,
+          max: zoom.max,
+          step,
+        });
+        setZoomValue(zoom.min);
+        const zoomConstraints = {
+          advanced: [
+            {
+              zoom: zoom.min,
+            },
+          ],
+        } as unknown as MediaTrackConstraints;
+        await (scanner as unknown as {
+          applyVideoConstraints: (constraints: MediaTrackConstraints) => Promise<void>;
+        }).applyVideoConstraints(zoomConstraints);
+      }
+    } catch {
+    }
+  };
+
+  const handleStartScanner = async () => {
+    setScannerError(null);
+    setIsScanning(true);
+
+    const scannerElement = document.getElementById("reader");
+    if (!scannerElement) {
+      setScannerError("Não foi possível iniciar a câmera. Tente novamente.");
+      setIsScanning(false);
+      return;
+    }
+
+    if (!scannerRef.current) {
+      scannerRef.current = new Html5Qrcode("reader", {
         formatsToSupport: [
           Html5QrcodeSupportedFormats.CODE_128,
-          Html5QrcodeSupportedFormats.CODE_39,
           Html5QrcodeSupportedFormats.EAN_13,
           Html5QrcodeSupportedFormats.QR_CODE,
         ],
-        verbose: false
+        verbose: false,
       });
-      let isMounted = true;
-
-      const startScanner = async () => {
-        try {
-          await scanner.start(
-            { facingMode: "environment" },
-            {
-              fps: 10,
-              qrbox: { width: 250, height: 150 },
-              aspectRatio: 1.0,
-            },
-            (decodedText) => {
-              if (isMounted) {
-                // Success
-                scanner.stop().then(() => {
-                   // Clear scanner instance
-                   scanner.clear();
-                }).catch(err => console.warn("Failed to stop scanner", err));
-
-                setAssetCode(decodedText);
-                setIsScanning(false);
-                setScannerError(null);
-
-                // Beep sound
-                if (typeof window !== "undefined") {
-                  const AudioContextRef =
-                    (window as typeof window & {
-                      webkitAudioContext?: typeof AudioContext;
-                    }).AudioContext ||
-                    (window as typeof window & {
-                      webkitAudioContext?: typeof AudioContext;
-                    }).webkitAudioContext;
-                  if (AudioContextRef) {
-                    const audioCtx = new AudioContextRef();
-                    const oscillator = audioCtx.createOscillator();
-                    const gainNode = audioCtx.createGain();
-                    oscillator.connect(gainNode);
-                    gainNode.connect(audioCtx.destination);
-                    oscillator.frequency.value = 880;
-                    gainNode.gain.setValueAtTime(0.2, audioCtx.currentTime);
-                    oscillator.start();
-                    oscillator.stop(audioCtx.currentTime + 0.15);
-                  }
-                }
-              }
-            },
-            () => {
-              // Ignore frame parse errors (very frequent)
-            }
-          );
-        } catch (err) {
-          console.error("Erro ao iniciar câmera", err);
-          if (isMounted) {
-            setScannerError("Não foi possível iniciar a câmera. Verifique as permissões.");
-          }
-        }
-      };
-
-      startScanner();
-
-      return () => {
-        isMounted = false;
-        // Cleanup: Stop if running. 
-        // Note: Html5Qrcode.stop() is async. We try to stop it if it's running.
-        if (scanner.isScanning) {
-            scanner.stop().then(() => scanner.clear()).catch(() => {});
-        } else {
-            scanner.clear();
-        }
-      };
     }
-  }, [isScanning, assetCode]);
+
+    const scanner = scannerRef.current as Html5Qrcode;
+    let hasResult = false;
+
+    try {
+      await scanner.start(
+        { facingMode: "environment" },
+        {
+          fps: 10,
+          qrbox: { width: 300, height: 100 },
+          aspectRatio: 1.0,
+        },
+        async (decodedText) => {
+          if (hasResult) return;
+          hasResult = true;
+          playBeep();
+          setAssetCode(decodedText);
+          setScannerError(null);
+          await stopScanner();
+        },
+        () => undefined
+      );
+
+      await applyInitialConstraints(scanner);
+    } catch {
+      setScannerError("Não foi possível iniciar a câmera. Verifique as permissões.");
+      await stopScanner();
+    }
+  };
+
+  const handleZoomChange = async (value: number) => {
+    setZoomValue(value);
+    const scanner = scannerRef.current;
+    if (!scanner) return;
+    const constraints = {
+      advanced: [
+        {
+          zoom: value,
+        },
+      ],
+    } as unknown as MediaTrackConstraints;
+    try {
+      await (scanner as unknown as {
+        applyVideoConstraints: (c: MediaTrackConstraints) => Promise<void>;
+      }).applyVideoConstraints(constraints);
+    } catch {
+    }
+  };
+
+  const handleManualCodeConfirm = () => {
+    const input = manualCodeRef.current;
+    if (input && input.value.trim()) {
+      setAssetCode(input.value.trim());
+      setScannerError(null);
+    }
+  };
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -131,7 +226,6 @@ export default function NewItemPage() {
     setError(null);
 
     try {
-      // Conversão da data para timestamp (local midnight)
       let calibrationDueDate: number | null = null;
       if (calibrationDate) {
         const [y, m, d] = calibrationDate.split("-").map(Number);
@@ -150,8 +244,7 @@ export default function NewItemPage() {
 
       await addDoc(collection(db, "items"), newItem);
       router.push("/items");
-    } catch (err) {
-      console.error("Erro ao salvar:", err);
+    } catch {
       setError("Erro ao salvar o item. Tente novamente.");
       setSaving(false);
     }
@@ -165,106 +258,106 @@ export default function NewItemPage() {
 
       {!assetCode && (
         <div className="bg-white p-4 md:p-6 rounded-lg shadow-sm border border-slate-200 text-center">
-          {isScanning ? (
-            <div>
-               <div className="mb-4 text-slate-500 text-sm">
-                Aponte a câmera para o código de barras ou QR Code
+          {!isScanning && (
+            <div className="py-6">
+              <div className="mb-4 text-slate-500">
+                Clique em INICIAR LEITURA para usar a câmera ou digite o código.
               </div>
-              <div
-                id="reader"
-                className="w-full max-w-full rounded-xl overflow-hidden border border-slate-200 min-h-[260px] bg-black"
-              ></div>
+              <button
+                type="button"
+                onClick={() => {
+                  setTimeout(() => {
+                    void handleStartScanner();
+                  }, 0);
+                }}
+                className="inline-flex items-center justify-center px-6 bg-blue-600 text-white font-medium rounded-lg hover:bg-blue-700 transition-colors min-h-[48px] w-full max-w-xs mb-4"
+              >
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  className="h-6 w-6 mr-2"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M3 7h4m10 0h4M5 7V5a2 2 0 012-2h10a2 2 0 012 2v2m0 0v10a2 2 0 01-2 2H7a2 2 0 01-2-2V7m5 4h4"
+                  />
+                </svg>
+                INICIAR LEITURA
+              </button>
+
+              <div className="mt-4 text-left">
+                <label className="block text-sm font-medium text-slate-700 mb-1">
+                  Código do Ativo (Manual)
+                </label>
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    ref={manualCodeRef}
+                    className="flex-1 bg-white border border-slate-300 text-slate-900 text-sm rounded-lg p-2.5 min-h-[48px]"
+                    placeholder="Digite o código..."
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        e.preventDefault();
+                        handleManualCodeConfirm();
+                      }
+                    }}
+                  />
+                  <button
+                    type="button"
+                    onClick={handleManualCodeConfirm}
+                    className="px-4 py-2 bg-slate-800 text-white rounded-lg min-h-[48px]"
+                  >
+                    OK
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {isScanning && (
+            <div className="space-y-4">
+              <div className="relative w-full rounded-xl overflow-hidden border border-slate-200 bg-black">
+                <div
+                  id="reader"
+                  className="w-full h-[260px]"
+                />
+                {zoomCapabilities && zoomValue !== null && (
+                  <div className="absolute bottom-3 left-0 right-0 flex justify-center px-4">
+                    <input
+                      type="range"
+                      min={zoomCapabilities.min}
+                      max={zoomCapabilities.max}
+                      step={zoomCapabilities.step}
+                      value={zoomValue}
+                      onChange={(e) => {
+                        const value = Number(e.target.value);
+                        void handleZoomChange(value);
+                      }}
+                      className="w-full max-w-xs"
+                    />
+                  </div>
+                )}
+              </div>
+
               {scannerError && (
-                <div className="mt-3 text-sm text-red-600">
+                <div className="text-sm text-red-600">
                   {scannerError}
                 </div>
               )}
-              
+
               <button
+                type="button"
                 onClick={() => {
-                  setIsScanning(false);
-                  setScannerError(null);
+                  void stopScanner();
                 }}
-                className="mt-4 w-full min-h-[48px] px-4 text-slate-700 font-medium border border-slate-300 rounded-lg hover:bg-slate-50 transition-colors"
+                className="w-full min-h-[48px] px-4 text-sm font-medium text-white bg-red-600 rounded-lg hover:bg-red-700 transition-colors"
               >
-                Digitar Código Manualmente
+                Cancelar
               </button>
-            </div>
-          ) : (
-            <div className="py-6">
-               <div className="mb-4 text-slate-500">
-                Digite o código manualmente ou use a câmera.
-              </div>
-              <button
-                onClick={() => {
-                    setIsScanning(true);
-                    setScannerError(null);
-                }}
-                className="inline-flex items-center justify-center px-6 bg-blue-600 text-white font-medium rounded-lg hover:bg-blue-700 transition-colors min-h-[48px] w-full max-w-xs mb-3"
-              >
-                <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v1m6 11h2m-6 0h-2v4m0-11v3m0 0h.01M12 12h4.01M16 20h4M4 12h4m12 0h.01M5 8h2a1 1 0 001-1V5a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1zm12 0h2a1 1 0 001-1V5a1 1 0 00-1-1h-2a1 1 0 00-1 1v2a1 1 0 001 1zM5 20h2a1 1 0 001-1v-2a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1z" />
-                </svg>
-                Ativar Câmera
-              </button>
-              
-               {/* Opção de digitar manual já está implícita se isScanning é false, mas vamos mostrar o form de input manual se o usuário quiser? 
-                   Na verdade, a lógica anterior era: Se !isScanning, mostra botão de escanear. Se clicar, mostra scanner.
-                   Se o usuário quiser digitar manual, ele clica em "Digitar Manualmente" DENTRO do scanner, que seta isScanning(false).
-                   E agora? Se isScanning(false), o que mostramos?
-                   Se isScanning(false), deveríamos mostrar um input manual para o assetCode?
-                   
-                   A lógica original tinha um botão "Digitar Código Manualmente" que apenas parava o scanner. 
-                   Mas onde o usuário digitava?
-                   Ah, não havia input manual de assetCode no código original visível na leitura anterior! 
-                   O código original tinha `if (!assetCode)` -> scanner UI.
-                   Se `assetCode` existisse -> form.
-                   
-                   Espere, o botão "Digitar Código Manualmente" no código original fazia:
-                   onClick={() => { setIsScanning(false); setScannerError(null); }}
-                   
-                   E quando !isScanning, mostrava o botão "Escanear Código".
-                   Não havia campo de input manual para o assetCode no estado !assetCode!
-                   Isso significa que o usuário não conseguia digitar manualmente o código no fluxo anterior, a menos que eu tenha perdido algo.
-                   
-                   Vamos verificar o código anterior:
-                   Linhas 159-217: Renderiza se !assetCode.
-                   Linhas 161-175: Se !isScanning -> Botão "Escanear Código".
-                   Linhas 176-215: Se isScanning -> Scanner + Botão "Digitar Código Manualmente".
-                   
-                   Se o usuário clicasse em "Digitar Código Manualmente", voltava para a tela com o botão "Escanear Código". Loop infinito sem opção de input.
-                   O usuário provavelmente quer poder digitar o código.
-                   
-                   Vou adicionar um input manual quando !isScanning.
-               */}
-               
-               <div className="mt-4">
-                 <label className="block text-sm font-medium text-slate-700 mb-1 text-left">Código do Ativo (Manual)</label>
-                 <div className="flex gap-2">
-                    <input 
-                        type="text" 
-                        className="flex-1 bg-white border border-slate-300 text-slate-900 text-sm rounded-lg p-2.5 min-h-[48px]"
-                        placeholder="Digite o código..."
-                        onKeyDown={(e) => {
-                            if (e.key === 'Enter') {
-                                setAssetCode((e.currentTarget as HTMLInputElement).value);
-                            }
-                        }}
-                        id="manual-asset-code"
-                    />
-                    <button
-                        onClick={() => {
-                            const input = document.getElementById('manual-asset-code') as HTMLInputElement;
-                            if (input && input.value) {
-                                setAssetCode(input.value);
-                            }
-                        }}
-                        className="px-4 py-2 bg-slate-800 text-white rounded-lg min-h-[48px]"
-                    >
-                        OK
-                    </button>
-                 </div>
-               </div>
             </div>
           )}
         </div>
@@ -275,10 +368,10 @@ export default function NewItemPage() {
           onSubmit={handleSave}
           className="bg-white p-4 md:p-6 rounded-lg shadow-sm border border-slate-200 space-y-4 animate-in fade-in slide-in-from-bottom-4 duration-500"
         >
-          
-          {/* Código do Ativo (Read-only) */}
           <div>
-            <label className="block text-sm font-medium text-slate-700 mb-1">Código do Ativo</label>
+            <label className="block text-sm font-medium text-slate-700 mb-1">
+              Código do Ativo
+            </label>
             <div className="flex items-center">
               <input
                 type="text"
@@ -294,7 +387,9 @@ export default function NewItemPage() {
                     setBrand("");
                     setDescription("");
                     setCalibrationDate("");
-                    setIsScanning(true); // Auto-start scanner again when clearing
+                    setIsScanning(false);
+                    setZoomCapabilities(null);
+                    setZoomValue(null);
                   }
                 }}
                 className="ml-2 text-sm text-blue-600 hover:text-blue-800"
@@ -302,12 +397,18 @@ export default function NewItemPage() {
                 Alterar
               </button>
             </div>
-            <p className="mt-1 text-xs text-slate-500">Este código foi lido do scanner e não pode ser editado manualmente.</p>
+            <p className="mt-1 text-xs text-slate-500">
+              Este código foi lido do scanner ou digitado manualmente e não pode ser editado aqui.
+            </p>
           </div>
 
-          {/* Marca */}
           <div>
-            <label htmlFor="brand" className="block text-sm font-medium text-slate-700 mb-1">Marca / Modelo</label>
+            <label
+              htmlFor="brand"
+              className="block text-sm font-medium text-slate-700 mb-1"
+            >
+              Marca / Modelo
+            </label>
             <input
               type="text"
               id="brand"
@@ -319,9 +420,13 @@ export default function NewItemPage() {
             />
           </div>
 
-          {/* Descrição */}
           <div>
-            <label htmlFor="description" className="block text-sm font-medium text-slate-700 mb-1">Descrição</label>
+            <label
+              htmlFor="description"
+              className="block text-sm font-medium text-slate-700 mb-1"
+            >
+              Descrição
+            </label>
             <input
               type="text"
               id="description"
@@ -333,9 +438,13 @@ export default function NewItemPage() {
             />
           </div>
 
-          {/* Data de Calibração */}
           <div>
-            <label htmlFor="calibrationDate" className="block text-sm font-medium text-slate-700 mb-1">Próxima Calibração (Opcional)</label>
+            <label
+              htmlFor="calibrationDate"
+              className="block text-sm font-medium text-slate-700 mb-1"
+            >
+              Próxima Calibração (Opcional)
+            </label>
             <input
               type="date"
               id="calibrationDate"
@@ -368,9 +477,25 @@ export default function NewItemPage() {
             >
               {saving ? (
                 <>
-                  <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                  <svg
+                    className="animate-spin -ml-1 mr-2 h-4 w-4 text-white"
+                    xmlns="http://www.w3.org/2000/svg"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                  >
+                    <circle
+                      className="opacity-25"
+                      cx="12"
+                      cy="12"
+                      r="10"
+                      stroke="currentColor"
+                      strokeWidth="4"
+                    />
+                    <path
+                      className="opacity-75"
+                      fill="currentColor"
+                      d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+                    />
                   </svg>
                   Salvando...
                 </>
