@@ -253,11 +253,11 @@ export default function Dashboard() {
       {/* Main Content: Chart & Actions */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
         {/* Chart Section */}
-        <div className="lg:col-span-2 bg-white p-6 rounded-xl shadow-sm border border-slate-100">
+        <div className="lg:col-span-2 bg-white p-4 md:p-6 rounded-xl shadow-sm border border-slate-100">
           <h3 className="text-lg font-bold text-slate-800 mb-6">Distribuição por Marca</h3>
-          <div className="h-[300px] w-full">
+          <div className="h-[400px] w-full">
             {chartData.length > 0 ? (
-              <ResponsiveContainer width="100%" height="100%">
+              <ResponsiveContainer width="100%" height={300}>
                 <PieChart>
                   <Pie
                     data={chartData}
@@ -276,12 +276,13 @@ export default function Dashboard() {
                   <Tooltip 
                     contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }}
                   />
-                  <Legend 
-                    layout="vertical" 
-                    verticalAlign="middle" 
-                    align="right"
+                  <Legend
+                    layout="horizontal"
+                    verticalAlign="bottom"
+                    align="center"
                     iconType="circle"
-                  />
+                    wrapperStyle={{ paddingTop: "20px" }}
+                  /> 
                 </PieChart>
               </ResponsiveContainer>
             ) : (

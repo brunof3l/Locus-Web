@@ -19,8 +19,10 @@ export default function NewItemPage() {
   const [error, setError] = useState<string | null>(null);
   const [scannerError, setScannerError] = useState<string | null>(null);
   const [isScanning, setIsScanning] = useState(false);
+  const [isAnalyzingPhoto, setIsAnalyzingPhoto] = useState(false);
   const html5QrCodeRef = useRef<Html5Qrcode | null>(null);
   const manualCodeRef = useRef<HTMLInputElement | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
@@ -86,6 +88,31 @@ export default function NewItemPage() {
     handleStopScanner();
     setAssetCode(decodedText);
     setScannerError(null);
+  };
+
+  const handlePhotoFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files && e.target.files[0];
+    if (!file) return;
+
+    setScannerError(null);
+    setIsAnalyzingPhoto(true);
+
+    try {
+      let instance = html5QrCodeRef.current;
+      if (!instance) {
+        instance = new Html5Qrcode("reader");
+        html5QrCodeRef.current = instance;
+      }
+
+      const decodedText = await instance.scanFile(file, true);
+      handleScanSuccess(decodedText);
+    } catch (err) {
+      console.error("Photo scan error", err);
+      setScannerError("Código não encontrado na foto. Tente aproximar mais e focar bem.");
+    } finally {
+      setIsAnalyzingPhoto(false);
+      e.target.value = "";
+    }
   };
 
   const handleStartScanner = async () => {
@@ -185,30 +212,65 @@ export default function NewItemPage() {
           {!isScanning && (
             <div className="py-6">
               <div className="mb-4 text-slate-500">
-                Clique em INICIAR LEITURA para usar a câmera ou digite o código.
+                Use o modo foto para melhor foco em etiquetas pequenas, ou use o vídeo ao vivo.
               </div>
+              <div className="flex flex-col items-center gap-3 mb-4">
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (fileInputRef.current) {
+                      fileInputRef.current.click();
+                    }
+                  }}
+                  className="inline-flex items-center justify-center px-6 bg-blue-600 text-white font-medium rounded-lg hover:bg-blue-700 transition-colors min-h-[48px] w-full max-w-xs"
+                >
+                  <span className="mr-2">📸</span>
+                  Tirar Foto (Melhor Foco)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    void handleStartScanner();
+                  }}
+                  className="inline-flex items-center justify-center px-6 bg-white text-blue-600 border border-blue-600 font-medium rounded-lg hover:bg-blue-50 transition-colors min-h-[48px] w-full max-w-xs"
+                >
+                  <svg
+                    xmlns="http://www.w3.org/2000/svg"
+                    className="h-6 w-6 mr-2"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                    stroke="currentColor"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M3 7h4m10 0h4M5 7V5a2 2 0 012-2h10a2 2 0 012 2v2m0 0v10a2 2 0 01-2 2H7a2 2 0 01-2-2V7m5 4h4"
+                    />
+                  </svg>
+                  Iniciar Leitura (Vídeo)
+                </button>
+              </div>
+              <input
+                ref={fileInputRef}
+                id="qr-input-file"
+                type="file"
+                accept="image/*"
+                capture="environment"
+                hidden
+                onChange={handlePhotoFileChange}
+              />
+              {isAnalyzingPhoto && (
+                <div className="mb-2 text-sm text-slate-500">
+                  Analisando imagem...
+                </div>
+              )}
               <button
                 type="button"
-                onClick={() => {
-                  void handleStartScanner();
-                }}
-                className="inline-flex items-center justify-center px-6 bg-blue-600 text-white font-medium rounded-lg hover:bg-blue-700 transition-colors min-h-[48px] w-full max-w-xs mb-4"
+                onClick={handleManualCodeConfirm}
+                className="hidden"
               >
-                <svg
-                  xmlns="http://www.w3.org/2000/svg"
-                  className="h-6 w-6 mr-2"
-                  fill="none"
-                  viewBox="0 0 24 24"
-                  stroke="currentColor"
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M3 7h4m10 0h4M5 7V5a2 2 0 012-2h10a2 2 0 012 2v2m0 0v10a2 2 0 01-2 2H7a2 2 0 01-2-2V7m5 4h4"
-                  />
-                </svg>
-                INICIAR LEITURA
+                Placeholder
               </button>
 
               <div className="mt-4 text-left">
