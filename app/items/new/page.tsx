@@ -318,48 +318,46 @@ export default function NewItemPage() {
             </div>
           )}
 
-          {isScanning && (
-            <div className="space-y-4">
-              <div className="relative w-full rounded-xl overflow-hidden border border-slate-200 bg-black">
-                <div
-                  id="reader"
-                  className="w-full h-[260px]"
-                />
-                {zoomCapabilities && zoomValue !== null && (
-                  <div className="absolute bottom-3 left-0 right-0 flex justify-center px-4">
-                    <input
-                      type="range"
-                      min={zoomCapabilities.min}
-                      max={zoomCapabilities.max}
-                      step={zoomCapabilities.step}
-                      value={zoomValue}
-                      onChange={(e) => {
-                        const value = Number(e.target.value);
-                        void handleZoomChange(value);
-                      }}
-                      className="w-full max-w-xs"
-                    />
-                  </div>
-                )}
-              </div>
-
-              {scannerError && (
-                <div className="text-sm text-red-600">
-                  {scannerError}
+          <div className={isScanning ? "space-y-4" : "hidden"}>
+            <div className="relative w-full rounded-xl overflow-hidden border border-slate-200 bg-black">
+              <div
+                id="reader"
+                className="w-full h-[260px]"
+              />
+              {zoomCapabilities && zoomValue !== null && (
+                <div className="absolute bottom-3 left-0 right-0 flex justify-center px-4">
+                  <input
+                    type="range"
+                    min={zoomCapabilities.min}
+                    max={zoomCapabilities.max}
+                    step={zoomCapabilities.step}
+                    value={zoomValue}
+                    onChange={(e) => {
+                      const value = Number(e.target.value);
+                      void handleZoomChange(value);
+                    }}
+                    className="w-full max-w-xs"
+                  />
                 </div>
               )}
-
-              <button
-                type="button"
-                onClick={() => {
-                  void stopScanner();
-                }}
-                className="w-full min-h-[48px] px-4 text-sm font-medium text-white bg-red-600 rounded-lg hover:bg-red-700 transition-colors"
-              >
-                Cancelar
-              </button>
             </div>
-          )}
+
+            {scannerError && (
+              <div className="text-sm text-red-600">
+                {scannerError}
+              </div>
+            )}
+
+            <button
+              type="button"
+              onClick={() => {
+                void stopScanner();
+              }}
+              className="w-full min-h-[48px] px-4 text-sm font-medium text-white bg-red-600 rounded-lg hover:bg-red-700 transition-colors"
+            >
+              Cancelar
+            </button>
+          </div>
         </div>
       )}
 
