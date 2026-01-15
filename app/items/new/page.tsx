@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
-import { Html5Qrcode, Html5QrcodeSupportedFormats } from "html5-qrcode";
+import Quagga from "@ericblade/quagga2";
 import { collection, addDoc } from "firebase/firestore";
 import { db, auth } from "@/lib/firebase";
 import { LocusItem } from "@/types";
@@ -19,14 +19,7 @@ export default function NewItemPage() {
   const [error, setError] = useState<string | null>(null);
   const [scannerError, setScannerError] = useState<string | null>(null);
   const [isScanning, setIsScanning] = useState(false);
-  const [zoomCapabilities, setZoomCapabilities] = useState<{
-    min: number;
-    max: number;
-    step: number;
-  } | null>(null);
-  const [zoomValue, setZoomValue] = useState<number | null>(null);
-
-  const scannerRef = useRef<Html5Qrcode | null>(null);
+  const quaggaInitializedRef = useRef(false);
   const manualCodeRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
@@ -42,13 +35,10 @@ export default function NewItemPage() {
 
   useEffect(() => {
     return () => {
-      const scanner = scannerRef.current;
-      if (!scanner) return;
-      scanner
-        .stop()
-        .then(() => scanner.clear())
-        .catch(() => undefined);
-      scannerRef.current = null;
+      try {
+        Quagga.stop();
+      } catch {
+      }
     };
   }, []);
 
@@ -70,165 +60,119 @@ export default function NewItemPage() {
     oscillator.stop(audioCtx.currentTime + 0.15);
   };
 
-  const stopScanner = async () => {
-    const scanner = scannerRef.current;
-    if (!scanner) {
-      setIsScanning(false);
-      setZoomCapabilities(null);
-      setZoomValue(null);
-      return;
-    }
-    try {
-      await scanner.stop();
-      await scanner.clear();
-    } catch {
-    } finally {
-      scannerRef.current = null;
-      setIsScanning(false);
-      setZoomCapabilities(null);
-      setZoomValue(null);
-    }
-  };
-
-  const handleScanSuccess = async (decodedText: string) => {
+  const handleScanSuccess = (decodedText: string) => {
     playBeep();
     setAssetCode(decodedText);
     setScannerError(null);
-    await stopScanner();
   };
-
-  const applyInitialConstraints = async (scanner: Html5Qrcode) => {
-    const baseConstraints = {
-      facingMode: "environment",
-      width: { min: 1280, ideal: 1920, max: 2560 },
-      height: { min: 720, ideal: 1080 },
-      advanced: [{ focusMode: "continuous" }],
-    } as unknown as MediaTrackConstraints;
-
-    try {
-      await scanner.applyVideoConstraints(baseConstraints);
-    } catch {
-    }
-
-    try {
-      const capabilities = await (scanner as unknown as {
-        getRunningTrackCameraCapabilities: () => Promise<{
-          zoom?: {
-            min: number;
-            max: number;
-            step?: number;
-          };
-        }>;
-      }).getRunningTrackCameraCapabilities();
-      const zoom = capabilities.zoom;
-      if (zoom && typeof zoom.min === "number" && typeof zoom.max === "number") {
-        const step = typeof zoom.step === "number" && zoom.step > 0 ? zoom.step : 0.1;
-        setZoomCapabilities({
-          min: zoom.min,
-          max: zoom.max,
-          step,
-        });
-        setZoomValue(zoom.min);
-        const zoomConstraints = {
-          advanced: [
-            {
-              zoom: zoom.min,
-            },
-          ],
-        } as unknown as MediaTrackConstraints;
-        await (scanner as unknown as {
-          applyVideoConstraints: (constraints: MediaTrackConstraints) => Promise<void>;
-        }).applyVideoConstraints(zoomConstraints);
-      }
-    } catch {
-    }
-  };
-
-  const handleStartScanner = async () => {
+  const handleStartScanner = () => {
     setScannerError(null);
     setIsScanning(true);
 
-    const scannerElement = document.getElementById("reader");
-    if (!scannerElement) {
+    const target = document.getElementById("quagga-scanner") as HTMLElement | null;
+    if (!target) {
       setScannerError("Não foi possível iniciar a câmera. Tente novamente.");
       setIsScanning(false);
       return;
     }
 
-    if (!scannerRef.current) {
-      scannerRef.current = new Html5Qrcode("reader", {
-        formatsToSupport: [
-          Html5QrcodeSupportedFormats.CODE_128,
-          Html5QrcodeSupportedFormats.EAN_13,
-          Html5QrcodeSupportedFormats.QR_CODE,
-        ],
-        verbose: false,
-      });
-    }
+    const onDetected = (result: unknown) => {
+      const codeResult = (result as { codeResult?: { code?: string; decodedCodes?: Array<{ error?: number }> } }).codeResult;
+      const code = codeResult?.code as string | undefined;
+      const decodedCodes = codeResult?.decodedCodes as Array<{ error?: number }> | undefined;
 
-    const scanner = scannerRef.current as Html5Qrcode;
-    let hasResult = false;
+      if (!code) {
+        return;
+      }
 
-    try {
-      await scanner.start(
-        { facingMode: "environment" },
-        {
-          fps: 10,
-          qrbox: { width: 300, height: 100 },
-          aspectRatio: 1.0,
-        },
-        async (decodedText) => {
-          if (hasResult) return;
-          hasResult = true;
-          await handleScanSuccess(decodedText);
-        },
-        () => undefined
-      );
+      if (decodedCodes && decodedCodes.length > 0) {
+        const errors = decodedCodes
+          .map((x) => typeof x.error === "number" ? x.error : 1)
+          .filter((x) => x >= 0);
+        const avgError = errors.reduce((sum, val) => sum + val, 0) / errors.length;
+        if (avgError > 0.1) {
+          return;
+        }
+      }
 
-      await applyInitialConstraints(scanner);
-    } catch {
-      setScannerError("Não foi possível iniciar a câmera. Verifique as permissões.");
-      await stopScanner();
-    }
-  };
-
-  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (!e.target.files || e.target.files.length === 0) return;
-
-    const imageFile = e.target.files[0];
-    const html5QrCode = new Html5Qrcode("reader-file-temp");
-
-    try {
-      const decodedText = await html5QrCode.scanFile(imageFile, true);
-      await handleScanSuccess(decodedText);
-    } catch {
-      alert("Não foi possível ler o código na foto. Tente aproximar mais e evitar reflexos.");
-    } finally {
+      Quagga.offDetected(onDetected);
       try {
-        await html5QrCode.clear();
+        Quagga.stop();
       } catch {
       }
-      e.target.value = "";
+      setIsScanning(false);
+      handleScanSuccess(code);
+    };
+
+    const onProcessed = (result: unknown) => {
+      const r = result as { box?: [number, number][] } | undefined;
+      const drawingCtx = Quagga.canvas?.ctx?.overlay;
+      const drawingCanvas = Quagga.canvas?.dom?.overlay;
+      if (!drawingCtx || !drawingCanvas) return;
+
+      drawingCtx.clearRect(0, 0, drawingCanvas.width, drawingCanvas.height);
+
+      if (r && r.box) {
+        drawingCtx.strokeStyle = "#00FF00";
+        drawingCtx.lineWidth = 2;
+        drawingCtx.beginPath();
+        r.box.forEach((point: [number, number], index: number) => {
+          if (index === 0) {
+            drawingCtx.moveTo(point[0], point[1]);
+          } else {
+            drawingCtx.lineTo(point[0], point[1]);
+          }
+        });
+        drawingCtx.closePath();
+        drawingCtx.stroke();
+      }
+    };
+
+    if (!quaggaInitializedRef.current) {
+      Quagga.init(
+        {
+          inputStream: {
+            type: "LiveStream",
+            constraints: {
+              facingMode: "environment",
+              width: 1280,
+              height: 720,
+            },
+            target,
+          },
+          locator: {
+            patchSize: "medium",
+            halfSample: false,
+        },
+        decoder: {
+          readers: ["code_128_reader", "ean_reader", "code_39_reader"],
+        },
+        locate: true,
+        },
+        (err) => {
+          if (err) {
+            setScannerError("Não foi possível iniciar a câmera. Verifique as permissões.");
+            setIsScanning(false);
+            return;
+          }
+
+          quaggaInitializedRef.current = true;
+          Quagga.onProcessed(onProcessed);
+          Quagga.onDetected(onDetected);
+          Quagga.start();
+        }
+      );
+    } else {
+      Quagga.start();
     }
   };
 
-  const handleZoomChange = async (value: number) => {
-    setZoomValue(value);
-    const scanner = scannerRef.current;
-    if (!scanner) return;
-    const constraints = {
-      advanced: [
-        {
-          zoom: value,
-        },
-      ],
-    } as unknown as MediaTrackConstraints;
+  const handleStopScanner = () => {
     try {
-      await (scanner as unknown as {
-        applyVideoConstraints: (c: MediaTrackConstraints) => Promise<void>;
-      }).applyVideoConstraints(constraints);
+      Quagga.stop();
     } catch {
     }
+    setIsScanning(false);
   };
 
   const handleManualCodeConfirm = () => {
@@ -345,31 +289,13 @@ export default function NewItemPage() {
           <div className={isScanning ? "space-y-4" : "hidden"}>
             <div className="relative w-full rounded-xl overflow-hidden border border-slate-200 bg-black">
               <div
-                id="reader"
+                id="quagga-scanner"
                 className="w-full h-[260px]"
               />
-              {zoomCapabilities && zoomValue !== null && (
-                <div className="absolute bottom-3 left-0 right-0 flex justify-center px-4">
-                  <input
-                    type="range"
-                    min={zoomCapabilities.min}
-                    max={zoomCapabilities.max}
-                    step={zoomCapabilities.step}
-                    value={zoomValue}
-                    onChange={(e) => {
-                      const value = Number(e.target.value);
-                      void handleZoomChange(value);
-                    }}
-                    className="w-full max-w-xs"
-                  />
-                </div>
-              )}
+              <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+                <div className="w-11/12 h-0.5 bg-red-500/80" />
+              </div>
             </div>
-
-            <div
-              id="reader-file-temp"
-              className="hidden"
-            />
 
             {scannerError && (
               <div className="text-sm text-red-600">
@@ -380,34 +306,12 @@ export default function NewItemPage() {
             <button
               type="button"
               onClick={() => {
-                void stopScanner();
+                handleStopScanner();
               }}
               className="w-full min-h-[48px] px-4 text-sm font-medium text-white bg-red-600 rounded-lg hover:bg-red-700 transition-colors"
             >
               Cancelar
             </button>
-
-            <button
-              type="button"
-              onClick={() => {
-                const input = document.getElementById("scan-file-input") as HTMLInputElement | null;
-                if (input) {
-                  input.click();
-                }
-              }}
-              className="w-full min-h-[48px] px-4 text-sm font-medium text-slate-800 border border-slate-400 rounded-lg hover:bg-slate-100 transition-colors"
-            >
-              📸 Não está lendo? Tirar Foto
-            </button>
-
-            <input
-              type="file"
-              id="scan-file-input"
-              accept="image/*"
-              capture="environment"
-              className="hidden"
-              onChange={handleFileUpload}
-            />
           </div>
         </div>
       )}
@@ -437,8 +341,6 @@ export default function NewItemPage() {
                     setDescription("");
                     setCalibrationDate("");
                     setIsScanning(false);
-                    setZoomCapabilities(null);
-                    setZoomValue(null);
                   }
                 }}
                 className="ml-2 text-sm text-blue-600 hover:text-blue-800"
