@@ -24,4 +24,5 @@ export interface LocusItem {
   state?: string;
   notes?: string;
   descriptionLower?: string;
+  itemImage?: string | null;
 }

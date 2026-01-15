@@ -11,19 +11,35 @@ import { onAuthStateChanged, type User } from "firebase/auth";
 export default function NewItemPage() {
   const router = useRouter();
   const [user, setUser] = useState<User | null>(null);
+  
+  // Scanner States
   const [assetCode, setAssetCode] = useState<string | null>(null);
-  const [brand, setBrand] = useState("");
-  const [description, setDescription] = useState("");
-  const [calibrationDate, setCalibrationDate] = useState("");
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const [scannerError, setScannerError] = useState<string | null>(null);
   const [isScanning, setIsScanning] = useState(false);
   const [isAnalyzingPhoto, setIsAnalyzingPhoto] = useState(false);
+  
+  // Form States
+  const [brand, setBrand] = useState("");
+  const [model, setModel] = useState("");
+  const [serialNumber, setSerialNumber] = useState("");
+  const [location, setLocation] = useState("");
+  const [responsibleSector, setResponsibleSector] = useState("");
+  const [state, setState] = useState("");
+  const [calibrationDueDate, setCalibrationDueDate] = useState("");
+  const [description, setDescription] = useState("");
+  const [notes, setNotes] = useState("");
+  const [itemImage, setItemImage] = useState<string | null>(null);
+  const [itemImagePreview, setItemImagePreview] = useState<string | null>(null);
+  
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
   const html5QrCodeRef = useRef<Html5Qrcode | null>(null);
   const manualCodeRef = useRef<HTMLInputElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const fileInputItemImageRef = useRef<HTMLInputElement | null>(null);
 
+  // Auth Effect
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
       if (!currentUser) {
@@ -35,6 +51,7 @@ export default function NewItemPage() {
     return () => unsubscribe();
   }, [router]);
 
+  // Scanner Cleanup Effect
   useEffect(() => {
     return () => {
       if (html5QrCodeRef.current) {
@@ -166,9 +183,63 @@ export default function NewItemPage() {
     }
   };
 
+  const compressImage = async (file: File): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      img.src = URL.createObjectURL(file);
+      img.onload = () => {
+        const canvas = document.createElement("canvas");
+        let width = img.width;
+        let height = img.height;
+        const maxSize = 800;
+        
+        if (width > height && width > maxSize) {
+          height *= maxSize / width;
+          width = maxSize;
+        } else if (height > maxSize) {
+          width *= maxSize / height;
+          height = maxSize;
+        }
+        
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext("2d");
+        if (!ctx) {
+          reject(new Error("Canvas context not available"));
+          return;
+        }
+        ctx.drawImage(img, 0, 0, width, height);
+        // Compress to JPEG with 0.7 quality
+        const dataUrl = canvas.toDataURL("image/jpeg", 0.7);
+        URL.revokeObjectURL(img.src);
+        resolve(dataUrl);
+      };
+      img.onerror = (err) => {
+        URL.revokeObjectURL(img.src);
+        reject(err);
+      };
+    });
+  };
+
+  const handleItemImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files && e.target.files[0];
+    if (!file) return;
+
+    try {
+      const compressedDataUrl = await compressImage(file);
+      setItemImage(compressedDataUrl);
+      setItemImagePreview(compressedDataUrl);
+    } catch (err) {
+      console.error("Erro ao comprimir imagem", err);
+      setError("Erro ao processar a imagem. Tente novamente.");
+    } finally {
+      e.target.value = "";
+    }
+  };
+
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!assetCode || !brand || !description || !user) {
+    if (!assetCode || !brand || !model || !serialNumber || !location || !responsibleSector || !state || !calibrationDueDate || !description || !user) {
       setError("Preencha todos os campos obrigatórios.");
       return;
     }
@@ -177,20 +248,21 @@ export default function NewItemPage() {
     setError(null);
 
     try {
-      let calibrationDueDate: number | null = null;
-      if (calibrationDate) {
-        const [y, m, d] = calibrationDate.split("-").map(Number);
-        const dateObj = new Date(y, m - 1, d);
-        calibrationDueDate = dateObj.getTime();
-      }
-
       const newItem: Omit<LocusItem, "id"> = {
         assetCode,
         brand,
+        model,
+        serialNumber,
+        location,
+        responsibleSector,
+        state,
+        calibrationDueDate: new Date(calibrationDueDate).getTime(),
         description,
-        createdBy: user.uid,
+        notes,
+        itemImage: itemImage || null,
+        descriptionLower: description.toLowerCase(),
         createdAt: Date.now(),
-        calibrationDueDate,
+        createdBy: user.uid,
       };
 
       await addDoc(collection(db, "items"), newItem);
@@ -204,11 +276,11 @@ export default function NewItemPage() {
   if (!user) return null;
 
   return (
-    <div className="max-w-xl mx-auto px-4 pt-4 pb-24">
+    <div className="max-w-4xl mx-auto px-4 pt-4 pb-24">
       <h1 className="text-2xl font-bold mb-4 text-slate-800">Novo Cadastro de Item</h1>
 
       {!assetCode && (
-        <div className="bg-white p-4 md:p-6 rounded-lg shadow-sm border border-slate-200 text-center">
+        <div className="bg-white p-4 md:p-6 rounded-lg shadow-sm border border-slate-200 text-center max-w-xl mx-auto">
           {!isScanning && (
             <div className="py-6">
               <div className="mb-4 text-slate-500">
@@ -265,14 +337,7 @@ export default function NewItemPage() {
                   Analisando imagem...
                 </div>
               )}
-              <button
-                type="button"
-                onClick={handleManualCodeConfirm}
-                className="hidden"
-              >
-                Placeholder
-              </button>
-
+              
               <div className="mt-4 text-left">
                 <label className="block text-sm font-medium text-slate-700 mb-1">
                   Código do Ativo (Manual)
@@ -303,10 +368,8 @@ export default function NewItemPage() {
           )}
 
           <div className={isScanning ? "space-y-4" : "hidden"}>
-            {/* Container Responsivo para o Scanner */}
             <div className="relative mx-auto w-full max-w-sm overflow-hidden rounded-lg border-2 border-slate-200 aspect-square bg-black">
               <div id="reader" className="w-full h-full" />
-              {/* Linha Vermelha (Laser) Centralizada */}
               <div className="absolute top-1/2 w-full h-0.5 bg-red-500 z-10 -translate-y-1/2" />
             </div>
 
@@ -334,89 +397,212 @@ export default function NewItemPage() {
           onSubmit={handleSave}
           className="bg-white p-4 md:p-6 rounded-lg shadow-sm border border-slate-200 space-y-4 animate-in fade-in slide-in-from-bottom-4 duration-500"
         >
-          <div>
-            <label className="block text-sm font-medium text-slate-700 mb-1">
-              Código do Ativo
-            </label>
-            <div className="flex items-center">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {/* Campos Obrigatórios */}
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1">
+                Código do Ativo
+              </label>
+              <div className="flex items-center">
+                <input
+                  type="text"
+                  value={assetCode}
+                  readOnly
+                  className="flex-1 bg-slate-100 border border-slate-300 text-slate-500 text-sm rounded-lg p-2.5 min-h-[48px] cursor-not-allowed focus:ring-0 focus:border-slate-300"
+                />
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (confirm("Deseja escanear outro código? Os dados atuais serão perdidos.")) {
+                      setAssetCode(null);
+                      setBrand("");
+                      setModel("");
+                      setSerialNumber("");
+                      setLocation("");
+                      setResponsibleSector("");
+                      setState("");
+                      setCalibrationDueDate("");
+                      setDescription("");
+                      setNotes("");
+                      setItemImage(null);
+                      setItemImagePreview(null);
+                      setIsScanning(false);
+                    }
+                  }}
+                  className="ml-2 text-sm text-blue-600 hover:text-blue-800 whitespace-nowrap"
+                >
+                  Alterar
+                </button>
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1">
+                Marca
+              </label>
               <input
                 type="text"
-                value={assetCode}
-                readOnly
-                className="flex-1 bg-slate-100 border border-slate-300 text-slate-500 text-sm rounded-lg p-2.5 min-h-[48px] cursor-not-allowed focus:ring-0 focus:border-slate-300"
+                value={brand}
+                onChange={(e) => setBrand(e.target.value)}
+                required
+                className="w-full bg-slate-50 border border-slate-300 text-slate-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block p-2.5 min-h-[48px]"
               />
-              <button
-                type="button"
-                onClick={() => {
-                  if (confirm("Deseja escanear outro código? Os dados atuais serão perdidos.")) {
-                    setAssetCode(null);
-                    setBrand("");
-                    setDescription("");
-                    setCalibrationDate("");
-                    setIsScanning(false);
-                  }
-                }}
-                className="ml-2 text-sm text-blue-600 hover:text-blue-800"
-              >
-                Alterar
-              </button>
             </div>
-            <p className="mt-1 text-xs text-slate-500">
-              Este código foi lido do scanner ou digitado manualmente e não pode ser editado aqui.
-            </p>
-          </div>
 
-          <div>
-            <label
-              htmlFor="brand"
-              className="block text-sm font-medium text-slate-700 mb-1"
-            >
-              Marca / Modelo
-            </label>
-            <input
-              type="text"
-              id="brand"
-              value={brand}
-              onChange={(e) => setBrand(e.target.value)}
-              required
-              placeholder="Ex: Dell Inspiron, Makita..."
-              className="w-full bg-slate-50 border border-slate-300 text-slate-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block p-2.5 min-h-[48px]"
-            />
-          </div>
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1">
+                Modelo
+              </label>
+              <input
+                type="text"
+                value={model}
+                onChange={(e) => setModel(e.target.value)}
+                required
+                className="w-full bg-slate-50 border border-slate-300 text-slate-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block p-2.5 min-h-[48px]"
+              />
+            </div>
 
-          <div>
-            <label
-              htmlFor="description"
-              className="block text-sm font-medium text-slate-700 mb-1"
-            >
-              Descrição
-            </label>
-            <input
-              type="text"
-              id="description"
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
-              required
-              placeholder="Ex: Notebook do Financeiro, Furadeira de Impacto..."
-              className="w-full bg-slate-50 border border-slate-300 text-slate-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block p-2.5 min-h-[48px]"
-            />
-          </div>
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1">
+                Número de Série
+              </label>
+              <input
+                type="text"
+                value={serialNumber}
+                onChange={(e) => setSerialNumber(e.target.value)}
+                required
+                className="w-full bg-slate-50 border border-slate-300 text-slate-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block p-2.5 min-h-[48px]"
+              />
+            </div>
 
-          <div>
-            <label
-              htmlFor="calibrationDate"
-              className="block text-sm font-medium text-slate-700 mb-1"
-            >
-              Próxima Calibração (Opcional)
-            </label>
-            <input
-              type="date"
-              id="calibrationDate"
-              value={calibrationDate}
-              onChange={(e) => setCalibrationDate(e.target.value)}
-              className="w-full bg-slate-50 border border-slate-300 text-slate-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block p-2.5 min-h-[48px]"
-            />
-            <p className="mt-1 text-xs text-slate-500">Deixe em branco se não aplicável.</p>
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1">
+                Localização Física
+              </label>
+              <input
+                type="text"
+                value={location}
+                onChange={(e) => setLocation(e.target.value)}
+                required
+                className="w-full bg-slate-50 border border-slate-300 text-slate-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block p-2.5 min-h-[48px]"
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1">
+                Setor Responsável
+              </label>
+              <input
+                type="text"
+                value={responsibleSector}
+                onChange={(e) => setResponsibleSector(e.target.value)}
+                required
+                className="w-full bg-slate-50 border border-slate-300 text-slate-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block p-2.5 min-h-[48px]"
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1">
+                Estado
+              </label>
+              <select
+                value={state}
+                onChange={(e) => setState(e.target.value)}
+                required
+                className="w-full bg-slate-50 border border-slate-300 text-slate-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block p-2.5 min-h-[48px]"
+              >
+                <option value="">Selecione</option>
+                <option value="Novo">Novo</option>
+                <option value="Usado">Usado</option>
+                <option value="Manutenção">Manutenção</option>
+                <option value="Defeituoso">Defeituoso</option>
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1">
+                Data de Próxima Calibração
+              </label>
+              <input
+                type="date"
+                value={calibrationDueDate}
+                onChange={(e) => setCalibrationDueDate(e.target.value)}
+                required
+                className="w-full bg-slate-50 border border-slate-300 text-slate-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block p-2.5 min-h-[48px]"
+              />
+            </div>
+
+            <div className="col-span-1 md:col-span-2">
+              <label className="block text-sm font-medium text-slate-700 mb-1">
+                Descrição
+              </label>
+              <textarea
+                value={description}
+                onChange={(e) => setDescription(e.target.value)}
+                required
+                className="w-full bg-slate-50 border border-slate-300 text-slate-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block p-2.5 min-h-[80px]"
+                rows={3}
+              />
+            </div>
+
+            <div className="col-span-1 md:col-span-2">
+              <label className="block text-sm font-medium text-slate-700 mb-1">
+                Observações
+              </label>
+              <textarea
+                value={notes}
+                onChange={(e) => setNotes(e.target.value)}
+                className="w-full bg-slate-50 border border-slate-300 text-slate-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block p-2.5 min-h-[80px]"
+                rows={3}
+              />
+            </div>
+
+            {/* Upload de Foto do Item */}
+            <div className="col-span-1 md:col-span-2">
+              <label className="block text-sm font-medium text-slate-700 mb-1">
+                Foto do Item
+              </label>
+              <div className="border-2 border-dashed border-slate-300 rounded-lg p-4 text-center">
+                {itemImagePreview ? (
+                  <div className="mb-4">
+                    <img
+                      src={itemImagePreview}
+                      alt="Preview da Foto do Item"
+                      className="max-w-full max-h-60 mx-auto rounded-lg shadow-sm"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setItemImage(null);
+                        setItemImagePreview(null);
+                      }}
+                      className="mt-2 text-sm text-red-600 hover:text-red-800"
+                    >
+                      Remover Foto
+                    </button>
+                  </div>
+                ) : (
+                  <p className="text-slate-500 mb-4">Nenhuma foto adicionada</p>
+                )}
+                
+                <button
+                  type="button"
+                  onClick={() => fileInputItemImageRef.current?.click()}
+                  className="inline-flex items-center justify-center px-4 py-2 bg-blue-600 text-white font-medium rounded-lg hover:bg-blue-700 transition-colors"
+                >
+                  <span className="mr-2">📸</span>
+                  Adicionar Foto do Item
+                </button>
+                <input
+                  ref={fileInputItemImageRef}
+                  type="file"
+                  accept="image/*"
+                  capture="environment"
+                  hidden
+                  onChange={handleItemImageUpload}
+                />
+              </div>
+            </div>
           </div>
 
           {error && (
@@ -461,10 +647,10 @@ export default function NewItemPage() {
                       d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
                     />
                   </svg>
-                  Salvando...
+                  Cadastrando...
                 </>
               ) : (
-                "Salvar Item"
+                "Cadastrar"
               )}
             </button>
           </div>
