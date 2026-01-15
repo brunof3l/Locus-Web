@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
-import Quagga from "@ericblade/quagga2";
+import { Html5Qrcode, Html5QrcodeSupportedFormats } from "html5-qrcode";
 import { collection, addDoc } from "firebase/firestore";
 import { db, auth } from "@/lib/firebase";
 import { LocusItem } from "@/types";
@@ -19,7 +19,7 @@ export default function NewItemPage() {
   const [error, setError] = useState<string | null>(null);
   const [scannerError, setScannerError] = useState<string | null>(null);
   const [isScanning, setIsScanning] = useState(false);
-  const quaggaInitializedRef = useRef(false);
+  const html5QrCodeRef = useRef<Html5Qrcode | null>(null);
   const manualCodeRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
@@ -35,9 +35,15 @@ export default function NewItemPage() {
 
   useEffect(() => {
     return () => {
-      try {
-        Quagga.stop();
-      } catch {
+      if (html5QrCodeRef.current) {
+        try {
+          if (html5QrCodeRef.current.isScanning) {
+            html5QrCodeRef.current.stop().catch((err) => console.error(err));
+          }
+          html5QrCodeRef.current.clear();
+        } catch (e) {
+          console.error("Cleanup error", e);
+        }
       }
     };
   }, []);
@@ -60,119 +66,69 @@ export default function NewItemPage() {
     oscillator.stop(audioCtx.currentTime + 0.15);
   };
 
+  const handleStopScanner = async () => {
+    if (html5QrCodeRef.current) {
+      try {
+        if (html5QrCodeRef.current.isScanning) {
+          await html5QrCodeRef.current.stop();
+        }
+        html5QrCodeRef.current.clear();
+      } catch (e) {
+        console.error("Failed to stop scanner", e);
+      }
+      html5QrCodeRef.current = null;
+    }
+    setIsScanning(false);
+  };
+
   const handleScanSuccess = (decodedText: string) => {
     playBeep();
+    handleStopScanner();
     setAssetCode(decodedText);
     setScannerError(null);
   };
-  const handleStartScanner = () => {
+
+  const handleStartScanner = async () => {
     setScannerError(null);
     setIsScanning(true);
 
-    const target = document.getElementById("quagga-scanner") as HTMLElement | null;
-    if (!target) {
-      setScannerError("Não foi possível iniciar a câmera. Tente novamente.");
-      setIsScanning(false);
-      return;
-    }
+    // Pequeno delay para garantir que o DOM renderizou a div#reader
+    await new Promise((resolve) => setTimeout(resolve, 100));
 
-    const onDetected = (result: unknown) => {
-      const codeResult = (result as { codeResult?: { code?: string; decodedCodes?: Array<{ error?: number }> } }).codeResult;
-      const code = codeResult?.code as string | undefined;
-      const decodedCodes = codeResult?.decodedCodes as Array<{ error?: number }> | undefined;
+    const formatsToSupport = [
+      Html5QrcodeSupportedFormats.CODE_128,
+      Html5QrcodeSupportedFormats.EAN_13,
+      Html5QrcodeSupportedFormats.CODE_39,
+    ];
 
-      if (!code) {
-        return;
-      }
+    try {
+      const html5QrCode = new Html5Qrcode("reader");
+      html5QrCodeRef.current = html5QrCode;
 
-      if (decodedCodes && decodedCodes.length > 0) {
-        const errors = decodedCodes
-          .map((x) => typeof x.error === "number" ? x.error : 1)
-          .filter((x) => x >= 0);
-        const avgError = errors.reduce((sum, val) => sum + val, 0) / errors.length;
-        if (avgError > 0.1) {
-          return;
-        }
-      }
+      const config = {
+        fps: 15,
+        qrbox: { width: 300, height: 80 },
+        aspectRatio: 1.0,
+        disableFlip: false,
+        formatsToSupport: formatsToSupport,
+      };
 
-      Quagga.offDetected(onDetected);
-      try {
-        Quagga.stop();
-      } catch {
-      }
-      setIsScanning(false);
-      handleScanSuccess(code);
-    };
-
-    const onProcessed = (result: unknown) => {
-      const r = result as { box?: [number, number][] } | undefined;
-      const drawingCtx = Quagga.canvas?.ctx?.overlay;
-      const drawingCanvas = Quagga.canvas?.dom?.overlay;
-      if (!drawingCtx || !drawingCanvas) return;
-
-      drawingCtx.clearRect(0, 0, drawingCanvas.width, drawingCanvas.height);
-
-      if (r && r.box) {
-        drawingCtx.strokeStyle = "#00FF00";
-        drawingCtx.lineWidth = 2;
-        drawingCtx.beginPath();
-        r.box.forEach((point: [number, number], index: number) => {
-          if (index === 0) {
-            drawingCtx.moveTo(point[0], point[1]);
-          } else {
-            drawingCtx.lineTo(point[0], point[1]);
-          }
-        });
-        drawingCtx.closePath();
-        drawingCtx.stroke();
-      }
-    };
-
-    if (!quaggaInitializedRef.current) {
-      Quagga.init(
-        {
-          inputStream: {
-            type: "LiveStream",
-            constraints: {
-              facingMode: "environment",
-              width: 1280,
-              height: 720,
-            },
-            target,
-          },
-          locator: {
-            patchSize: "medium",
-            halfSample: false,
+      await html5QrCode.start(
+        { facingMode: "environment" },
+        config,
+        (decodedText) => {
+          handleScanSuccess(decodedText);
         },
-        decoder: {
-          readers: ["code_128_reader", "ean_reader", "code_39_reader"],
-        },
-        locate: true,
-        },
-        (err) => {
-          if (err) {
-            setScannerError("Não foi possível iniciar a câmera. Verifique as permissões.");
-            setIsScanning(false);
-            return;
-          }
-
-          quaggaInitializedRef.current = true;
-          Quagga.onProcessed(onProcessed);
-          Quagga.onDetected(onDetected);
-          Quagga.start();
+        (errorMessage) => {
+          // Apenas logar erro para debug, não mostrar na UI para não poluir
+          console.log("Scan error:", errorMessage);
         }
       );
-    } else {
-      Quagga.start();
+    } catch (err) {
+      console.error("Error starting scanner", err);
+      setScannerError("Não foi possível iniciar a câmera. Verifique as permissões ou tente novamente.");
+      setIsScanning(false);
     }
-  };
-
-  const handleStopScanner = () => {
-    try {
-      Quagga.stop();
-    } catch {
-    }
-    setIsScanning(false);
   };
 
   const handleManualCodeConfirm = () => {
@@ -234,9 +190,7 @@ export default function NewItemPage() {
               <button
                 type="button"
                 onClick={() => {
-                  setTimeout(() => {
-                    void handleStartScanner();
-                  }, 0);
+                  void handleStartScanner();
                 }}
                 className="inline-flex items-center justify-center px-6 bg-blue-600 text-white font-medium rounded-lg hover:bg-blue-700 transition-colors min-h-[48px] w-full max-w-xs mb-4"
               >
@@ -287,14 +241,11 @@ export default function NewItemPage() {
           )}
 
           <div className={isScanning ? "space-y-4" : "hidden"}>
-            <div className="relative w-full rounded-xl overflow-hidden border border-slate-200 bg-black">
-              <div
-                id="quagga-scanner"
-                className="w-full h-[260px]"
-              />
-              <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
-                <div className="w-11/12 h-0.5 bg-red-500/80" />
-              </div>
+            {/* Container Responsivo para o Scanner */}
+            <div className="relative mx-auto w-full max-w-sm overflow-hidden rounded-lg border-2 border-slate-200 aspect-square bg-black">
+              <div id="reader" className="w-full h-full" />
+              {/* Linha Vermelha (Laser) Centralizada */}
+              <div className="absolute top-1/2 w-full h-0.5 bg-red-500 z-10 -translate-y-1/2" />
             </div>
 
             {scannerError && (
@@ -306,7 +257,7 @@ export default function NewItemPage() {
             <button
               type="button"
               onClick={() => {
-                handleStopScanner();
+                void handleStopScanner();
               }}
               className="w-full min-h-[48px] px-4 text-sm font-medium text-white bg-red-600 rounded-lg hover:bg-red-700 transition-colors"
             >
