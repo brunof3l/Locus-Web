@@ -90,6 +90,13 @@ export default function NewItemPage() {
     }
   };
 
+  const handleScanSuccess = async (decodedText: string) => {
+    playBeep();
+    setAssetCode(decodedText);
+    setScannerError(null);
+    await stopScanner();
+  };
+
   const applyInitialConstraints = async (scanner: Html5Qrcode) => {
     const baseConstraints = {
       facingMode: "environment",
@@ -173,10 +180,7 @@ export default function NewItemPage() {
         async (decodedText) => {
           if (hasResult) return;
           hasResult = true;
-          playBeep();
-          setAssetCode(decodedText);
-          setScannerError(null);
-          await stopScanner();
+          await handleScanSuccess(decodedText);
         },
         () => undefined
       );
@@ -185,6 +189,26 @@ export default function NewItemPage() {
     } catch {
       setScannerError("Não foi possível iniciar a câmera. Verifique as permissões.");
       await stopScanner();
+    }
+  };
+
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!e.target.files || e.target.files.length === 0) return;
+
+    const imageFile = e.target.files[0];
+    const html5QrCode = new Html5Qrcode("reader-file-temp");
+
+    try {
+      const decodedText = await html5QrCode.scanFile(imageFile, true);
+      await handleScanSuccess(decodedText);
+    } catch {
+      alert("Não foi possível ler o código na foto. Tente aproximar mais e evitar reflexos.");
+    } finally {
+      try {
+        await html5QrCode.clear();
+      } catch {
+      }
+      e.target.value = "";
     }
   };
 
@@ -342,6 +366,11 @@ export default function NewItemPage() {
               )}
             </div>
 
+            <div
+              id="reader-file-temp"
+              className="hidden"
+            />
+
             {scannerError && (
               <div className="text-sm text-red-600">
                 {scannerError}
@@ -357,6 +386,28 @@ export default function NewItemPage() {
             >
               Cancelar
             </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                const input = document.getElementById("scan-file-input") as HTMLInputElement | null;
+                if (input) {
+                  input.click();
+                }
+              }}
+              className="w-full min-h-[48px] px-4 text-sm font-medium text-slate-800 border border-slate-400 rounded-lg hover:bg-slate-100 transition-colors"
+            >
+              📸 Não está lendo? Tirar Foto
+            </button>
+
+            <input
+              type="file"
+              id="scan-file-input"
+              accept="image/*"
+              capture="environment"
+              className="hidden"
+              onChange={handleFileUpload}
+            />
           </div>
         </div>
       )}
